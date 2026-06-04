@@ -1,0 +1,8 @@
+{
+  "name": "Remix: Insumos Críticos",
+  "description": "Aplicación de control y monitoreo en tiempo real de insumos críticos para planta farmacéutica.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
