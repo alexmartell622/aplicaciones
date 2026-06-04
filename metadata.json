@@ -1,0 +1,6 @@
+{
+  "name": "Bitácora Dpto",
+  "description": "Bitácora departamental para control de incidentes, reconocimientos, acciones correctivas y tablero Kanban y Dashboard para el control de operaciones.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
