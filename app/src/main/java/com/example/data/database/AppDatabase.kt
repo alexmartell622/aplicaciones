@@ -1,22 +1,15 @@
-package com.example.data.local
+package com.example.data.database
 
 import android.content.Context
-import androidx.room.*
-import com.example.data.model.*
+import androidx.room.Database
+import androidx.room.Room
+import androidx.room.RoomDatabase
+import com.example.data.ReadingEntity
+import com.example.data.RoundEntity
 
-@Database(
-    entities = [
-        Collaborator::class,
-        BinnacleEntry::class,
-        ActionItem::class,
-        AuditLog::class
-    ],
-    version = 1,
-    exportSchema = false
-)
+@Database(entities = [RoundEntity::class, ReadingEntity::class], version = 1, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
-
-    abstract fun binnacleDao(): BinnacleDao
+    abstract fun supplyDao(): SupplyDao
 
     companion object {
         @Volatile
@@ -27,9 +20,9 @@ abstract class AppDatabase : RoomDatabase() {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
-                    "binnacle_database"
+                    "farma_supplies_database"
                 )
-                .fallbackToDestructiveMigration() // Simple strategy for MVP development
+                .fallbackToDestructiveMigration()
                 .build()
                 INSTANCE = instance
                 instance
