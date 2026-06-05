@@ -12,6 +12,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -163,6 +164,7 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
     }
 
     Scaffold(
+        modifier = Modifier.fillMaxSize(),
         topBar = {
             TopAppBar(
                 title = {
@@ -246,7 +248,6 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
                 windowInsets = WindowInsets.navigationBars,
                 modifier = Modifier
                     .testTag("bottom_nav")
-                    .height(68.dp)
             ) {
                 AppTab.values().forEach { tab ->
                     val isSelected = selectedTab == tab
@@ -298,11 +299,60 @@ fun MainAppScreen(viewModel: MainViewModel = viewModel()) {
 // ----------------------------------------------------------------------------
 // DASHBOARD VIEW (LIVE BI STATUS)
 // ----------------------------------------------------------------------------
+// Helper to calculate capacity percentage dynamically based on numerical metrics
+fun calculateCapacityPercentage(valueStr: String, definition: com.example.data.SupplyDefinition): Float {
+    if (valueStr.isEmpty() || valueStr == "---") return 0f
+    
+    // Clean up commas/extra texts
+    val cleanedValue = valueStr.replace(",", "").filter { it.isDigit() || it == '.' }
+    val numValue = cleanedValue.toFloatOrNull() ?: return 0f
+    
+    val cleanedCapacity = definition.capacity.replace(",", "").filter { it.isDigit() || it == '.' }
+    val capacityNum = cleanedCapacity.toFloatOrNull() ?: 100f
+    if (capacityNum <= 0f) return 0f
+    
+    return if (definition.unit == "%") {
+        (numValue / 100f).coerceIn(0f, 1f)
+    } else {
+        (numValue / capacityNum).coerceIn(0f, 1f)
+    }
+}
+
 @Composable
 fun DashboardPage(latestRound: RoundWithReadings?, viewModel: MainViewModel) {
     var selectedCategoryFilter by remember { mutableStateOf("Todos") }
+    var selectedPlantFilter by remember { mutableStateOf("Megaplanta") }
+    var showOnlyAlerts by remember { mutableStateOf(false) }
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
+
+    val plantCategories = remember(selectedPlantFilter) {
+        when (selectedPlantFilter) {
+            "Megaplanta" -> listOf(
+                SupplyConfig.CAT_COMBUSTIBLE,
+                SupplyConfig.CAT_AGUA_SUAVE_CALDERAS,
+                SupplyConfig.CAT_NIVEL_CISTERNAS_MEGA,
+                SupplyConfig.CAT_GASES_CRITICOS,
+                SupplyConfig.CAT_GASES_ESPECIALES
+            )
+            "Merliot" -> listOf(
+                SupplyConfig.CAT_INSUMOS_M1,
+                SupplyConfig.CAT_TANQUES_M1,
+                SupplyConfig.CAT_INSUMOS_M2,
+                SupplyConfig.CAT_AGUAS_CALDERAS_M2,
+                SupplyConfig.CAT_CISTERNAS_M2,
+                SupplyConfig.CAT_GASES_M2,
+                SupplyConfig.CAT_SISTEMAS_COMPRESORES
+            )
+            else -> SupplyConfig.categories
+        }
+    }
+
+    LaunchedEffect(selectedPlantFilter) {
+        if (selectedCategoryFilter != "Todos" && selectedCategoryFilter !in plantCategories) {
+            selectedCategoryFilter = "Todos"
+        }
+    }
 
     if (latestRound == null) {
         Column(
@@ -335,10 +385,16 @@ fun DashboardPage(latestRound: RoundWithReadings?, viewModel: MainViewModel) {
             )
         }
     } else {
-        val totalItems = SupplyConfig.definitions.size
-        val alertsCount = latestRound.readings.count { it.isAlerted }
+        val activeDefinitionsForStats = SupplyConfig.definitions.filter {
+            selectedPlantFilter == "Todos" || it.plant == selectedPlantFilter
+        }
+        val totalItems = activeDefinitionsForStats.size
+        val alertsCount = latestRound.readings.count { r ->
+            val def = SupplyConfig.definitions.find { it.key == r.supplyKey }
+            def != null && (selectedPlantFilter == "Todos" || def.plant == selectedPlantFilter) && r.isAlerted
+        }
         val okCount = totalItems - alertsCount
-        val progressPct = (okCount.toFloat() / totalItems.toFloat())
+        val progressPct = if (totalItems > 0) (okCount.toFloat() / totalItems.toFloat()) else 1f
 
         LazyColumn(
             modifier = Modifier
@@ -376,11 +432,14 @@ fun DashboardPage(latestRound: RoundWithReadings?, viewModel: MainViewModel) {
                                 )
                             }
 
-                            // Colored indicator dot
+                            // Colored indicator dot - Click redirects to filtered alerts view
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(20.dp))
                                     .background(if (alertsCount > 0) Color(0xFFFFEBEE) else Color(0xFFE8F5E9))
+                                    .clickable(enabled = alertsCount > 0) {
+                                        showOnlyAlerts = !showOnlyAlerts
+                                    }
                                     .padding(vertical = 4.dp, horizontal = 12.dp)
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -392,7 +451,9 @@ fun DashboardPage(latestRound: RoundWithReadings?, viewModel: MainViewModel) {
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = if (alertsCount > 0) "$alertsCount Alertas" else "Todo OK",
+                                        text = if (alertsCount > 0) {
+                                            if (showOnlyAlerts) "Ver todo ($alertsCount)" else "$alertsCount Alertas ⚠️"
+                                        } else "Todo OK",
                                         fontWeight = FontWeight.ExtraBold,
                                         fontSize = 12.sp,
                                         color = if (alertsCount > 0) Color(0xFFD32F2F) else Color(0xFF2E7D32)
@@ -447,6 +508,36 @@ fun DashboardPage(latestRound: RoundWithReadings?, viewModel: MainViewModel) {
                                         )
                                     )
                             )
+                        }
+
+                        // Hotspot guidance for redirection click to alerts list
+                        if (alertsCount > 0) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Card(
+                                onClick = { showOnlyAlerts = !showOnlyAlerts },
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE)),
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Warning,
+                                        contentDescription = "Alerta",
+                                        tint = Color(0xFFD32F2F),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (showOnlyAlerts) "⚠️ Mostrando solo alertas. Clic para VER TODOS." else "⚠️ Hay $alertsCount alertas activas. ¡CLIC AQUÍ PARA VER DETALLE!",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = Color(0xFFC53030)
+                                    )
+                                }
+                            }
                         }
 
                         Spacer(modifier = Modifier.height(12.dp))
@@ -549,10 +640,97 @@ fun DashboardPage(latestRound: RoundWithReadings?, viewModel: MainViewModel) {
                 }
             }
 
-            // Filter category pills
+            // Alerts Warning Active Filter Banner
+            if (showOnlyAlerts) {
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE)),
+                        border = BorderStroke(1.dp, Color(0xFFD32F2F).copy(alpha = 0.3f))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = "Filtro activo",
+                                    tint = Color(0xFFD32F2F),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Filtrando por: Solo Suministros en Alerta ($alertsCount)",
+                                    color = Color(0xFFD32F2F),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            TextButton(
+                                onClick = { showOnlyAlerts = false },
+                                contentPadding = PaddingValues(horizontal = 8.dp)
+                            ) {
+                                Text("Ver Todos", color = Color(0xFF144D94), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Plant filters ("Megaplanta" and "Merliot" - Exactly 2 buttons!)
             item {
                 Text(
-                    text = "Ver por Área de Proceso:",
+                    text = "Filtrar por Planta:",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    listOf("Megaplanta", "Merliot").forEach { plantName ->
+                        val isSelected = selectedPlantFilter == plantName
+                        Button(
+                            onClick = { selectedPlantFilter = plantName },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isSelected) Color(0xFF144D94) else Color(0xFFF5F5F5),
+                                contentColor = if (isSelected) Color.White else Color.DarkGray
+                            ),
+                            modifier = Modifier.weight(1f).testTag("filter_plant_$plantName"),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(vertical = 10.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (plantName == "Megaplanta") Icons.Default.Home else Icons.Default.Info,
+                                    contentDescription = plantName,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = if (isSelected) Color.White else Color.Gray
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = plantName,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Filter category pills (Area de Proceso - strictly limited to the chosen plant!)
+            item {
+                Text(
+                    text = "Filtrar por Área de Proceso:",
                     fontWeight = FontWeight.Bold,
                     fontSize = 13.sp,
                     color = MaterialTheme.colorScheme.onBackground,
@@ -574,7 +752,7 @@ fun DashboardPage(latestRound: RoundWithReadings?, viewModel: MainViewModel) {
                             )
                         )
                     }
-                    items(SupplyConfig.categories) { category ->
+                    items(plantCategories) { category ->
                         FilterChip(
                             selected = selectedCategoryFilter == category,
                             onClick = { selectedCategoryFilter = category },
@@ -588,11 +766,16 @@ fun DashboardPage(latestRound: RoundWithReadings?, viewModel: MainViewModel) {
                 }
             }
 
-            // Grouped items sorted
-            val filteredDefinitions = if (selectedCategoryFilter == "Todos") {
-                SupplyConfig.definitions
-            } else {
-                SupplyConfig.definitions.filter { it.category == selectedCategoryFilter }
+            // Cross-filtered lists (Plant, Category, and Alert constraint)
+            val filteredDefinitions = SupplyConfig.definitions.filter { def ->
+                val matchesCategory = (selectedCategoryFilter == "Todos") || (def.category == selectedCategoryFilter)
+                val matchesPlant = def.plant == selectedPlantFilter
+                
+                val reading = latestRound.readings.find { it.supplyKey == def.key }
+                val isAlert = reading?.isAlerted ?: false
+                val matchesAlerts = !showOnlyAlerts || isAlert
+                
+                matchesCategory && matchesPlant && matchesAlerts
             }
 
             items(filteredDefinitions) { definition ->
@@ -604,12 +787,12 @@ fun DashboardPage(latestRound: RoundWithReadings?, viewModel: MainViewModel) {
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = Color.White),
                     border = BorderStroke(
-                        width = if (isAlert) 1.5.dp else 1.dp,
-                        color = if (isAlert) Color(0xFFD32F2F).copy(alpha = 0.5f) else Color(0xFFEEEEEE)
+                        width = if (isAlert) 2.dp else 1.dp,
+                        color = if (isAlert) Color(0xFFD32F2F) else Color(0xFFE2E8F0)
                     ),
-                    shape = RoundedCornerShape(10.dp)
+                    shape = RoundedCornerShape(12.dp)
                 ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
+                    Column(modifier = Modifier.padding(12.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -618,7 +801,7 @@ fun DashboardPage(latestRound: RoundWithReadings?, viewModel: MainViewModel) {
                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                                 Box(
                                     modifier = Modifier
-                                        .size(36.dp)
+                                        .size(34.dp)
                                         .clip(CircleShape)
                                         .background(if (isAlert) Color(0xFFFFEBEE) else Color(0xFFE8F5E9)),
                                     contentAlignment = Alignment.Center
@@ -630,78 +813,151 @@ fun DashboardPage(latestRound: RoundWithReadings?, viewModel: MainViewModel) {
                                         modifier = Modifier.size(18.dp)
                                     )
                                 }
-                                Spacer(modifier = Modifier.width(12.dp))
+                                Spacer(modifier = Modifier.width(10.dp))
                                 Column {
                                     Text(
                                         text = definition.name,
-                                        fontWeight = FontWeight.Bold,
+                                        fontWeight = FontWeight.ExtraBold,
                                         fontSize = 14.sp,
-                                        color = Color(0xFF144D94),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
+                                        color = Color(0xFF0F172A)
                                     )
                                     Text(
-                                        text = definition.category,
+                                        text = "${definition.category} • ${definition.plant}",
                                         fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = Color(0xFF64748B),
+                                        fontWeight = FontWeight.Medium
                                     )
                                 }
                             }
 
-                            // Badge Status
+                            // Compact Status Badge
                             Box(
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(if (isAlert) Color(0xFFFFEBEE) else Color(0xFFE8F5E9))
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (isAlert) Color(0xFFFFEBEE) else Color(0xFFE2F0D9))
                                     .padding(vertical = 4.dp, horizontal = 10.dp)
                             ) {
                                 Text(
-                                    text = if (isAlert) "ABA (Abastecer)" else "OK",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (isAlert) Color(0xFFD32F2F) else Color(0xFF2E7D32)
+                                    text = if (isAlert) "ALERTA (Abastecer) ⚠️" else "OPERATIVO OK",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = if (isAlert) Color(0xFFC53030) else Color(0xFF2E7D32)
                                 )
                             }
                         }
 
                         Spacer(modifier = Modifier.height(10.dp))
 
+                        // Values grid inside the supply frame (with everything properly bolded!)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.Top
                         ) {
-                            Column {
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = "VALOR REGISTRADO",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = Color(0xFF64748B)
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = valueStr,
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = if (isAlert) Color(0xFFC53030) else Color(0xFF0F172A)
                                 )
                                 Text(
-                                    text = "$valueStr ${definition.unit}",
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = if (isAlert) Color(0xFFD32F2F) else Color(0xFF121212)
+                                    text = "Unidad: ${definition.unit}",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF64748B)
                                 )
                             }
 
-                            Column(horizontalAlignment = Alignment.End) {
+                            Column(modifier = Modifier.weight(1.2f), horizontalAlignment = Alignment.End) {
                                 Text(
-                                    text = "REGLA DE CONVERGENCIA",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                    text = "REGLA / CONVERGENCIA",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = Color(0xFF64748B)
                                 )
+                                Spacer(modifier = Modifier.height(2.dp))
                                 Text(
                                     text = definition.reference,
                                     fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    fontWeight = FontWeight.Black,
+                                    color = if (isAlert) Color(0xFFC53030) else Color(0xFF1E293B),
+                                    textAlign = TextAlign.End
                                 )
+                                Spacer(modifier = Modifier.height(2.dp))
                                 Text(
-                                    text = "Max: ${definition.capacity}",
-                                    fontSize = 10.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                    text = "Límite Máx (Capacidad): ${definition.capacity}",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = Color(0xFF1E293B),
+                                    textAlign = TextAlign.End
+                                )
+                            }
+                        }
+
+                        // Semáforo Indicator components (Custom Semáforo status bar)
+                        Spacer(modifier = Modifier.height(12.dp))
+                        val progressValue = calculateCapacityPercentage(valueStr, definition)
+                        val barColor = if (isAlert) Color(0xFFD32F2F) else Color(0xFF2E7D32)
+
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xFFF8FAFC))
+                                .border(1.dp, Color(0xFFF1F5F9), RoundedCornerShape(8.dp))
+                                .padding(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(barColor)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (isAlert) "Semáforo: ABASTECER 🔴" else "Semáforo: OPERATIVO OK 🟢",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = barColor
+                                    )
+                                }
+                                if (valueStr != "---" && valueStr.isNotEmpty()) {
+                                    Text(
+                                        text = "${(progressValue * 100).toInt()}% Registrado",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Black,
+                                        color = Color(0xFF475569)
+                                    )
+                                }
+                            }
+                            // Custom Traffic-Light progress status bar
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(8.dp)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color(0xFFE2E8F0))
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth(if (progressValue > 0f) progressValue else 0.05f)
+                                        .fillMaxHeight()
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(barColor)
                                 )
                             }
                         }
@@ -730,6 +986,9 @@ fun NewRoundPage(viewModel: MainViewModel) {
 
     val shifts = listOf("Diurno", "Nocturno", "Mixto")
     val steamStates = listOf("Operando", "En espera", "Fuera de servicio")
+
+    // Selected plant configuration for form filtering
+    var selectedPlantInput by remember { mutableStateOf("Megaplanta") }
 
     LazyColumn(
         modifier = Modifier
@@ -773,6 +1032,47 @@ fun NewRoundPage(viewModel: MainViewModel) {
                     )
 
                     Spacer(modifier = Modifier.height(12.dp))
+
+                    // Plant Selector
+                    Text(
+                        text = "Seleccionar Planta de Trabajo:",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        listOf("Megaplanta", "Merliot").forEach { plantName ->
+                            val isSelected = selectedPlantInput == plantName
+                            Button(
+                                onClick = { selectedPlantInput = plantName },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (isSelected) Color(0xFF144D94) else Color(0xFFF5F5F5),
+                                    contentColor = if (isSelected) Color.White else Color.DarkGray
+                                ),
+                                modifier = Modifier.weight(1f).testTag("select_form_plant_$plantName"),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(vertical = 8.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        imageVector = if (plantName == "Megaplanta") Icons.Default.Home else Icons.Default.Info,
+                                        contentDescription = plantName,
+                                        modifier = Modifier.size(16.dp),
+                                        tint = if (isSelected) Color.White else Color.Gray
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(plantName, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
 
                     // Shift selection
                     Text(
@@ -851,8 +1151,10 @@ fun NewRoundPage(viewModel: MainViewModel) {
             }
         }
 
-        // Section Inputs Group
-        items(SupplyConfig.definitions) { definition ->
+        // Section Inputs Group filtered by selected plant
+        val visibleDefinitions = SupplyConfig.definitions.filter { it.plant == selectedPlantInput }
+
+        items(visibleDefinitions) { definition ->
             val value = readingsMap[definition.key] ?: ""
             val isManualChecked = replenishCheckMap[definition.key] ?: false
 
@@ -911,7 +1213,7 @@ fun NewRoundPage(viewModel: MainViewModel) {
                                 )
                             },
                             keyboardOptions = KeyboardOptions(
-                                keyboardType = KeyboardType.Number,
+                                keyboardType = if (definition.isNumeric) KeyboardType.Number else KeyboardType.Text,
                                 imeAction = ImeAction.Next
                             ),
                             keyboardActions = KeyboardActions(
